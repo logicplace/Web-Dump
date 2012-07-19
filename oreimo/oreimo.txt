@@ -1,0 +1,3 @@
+http://www.mangafox.com/manga/my_little_sister_can_t_be_this_cute/v%2b!3*1;/c%3c!2*1+;/%p!1*1;.html
+-s http://[0-9]+\.p\.s\.mfcdn\.net/store/manga/7029/[0-9]+-[0-9]+\.0/compressed/([^/]+.jpg)
+-f Book-%b/Chapter-%c/#1

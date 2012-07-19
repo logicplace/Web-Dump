@@ -1,0 +1,35 @@
+No spaces, only included here for legibility!
+
+COUNTER         START [FORMATTING] NAME [HOWTO] END
+
+START           /%/
+FORMATTING      [RIGHT-PAD] [PADDING-CHAR] WIDTH
+NAME            /[a-zA-Z]/
+HOWTO           [NO-RESET | NO-RESET-RETURN] [ORDER | LINKED] [404-TOLERANCE | QUIT-WHEN-FOUND] [DIGITS] [LIMITS]
+END             /;/
+
+RIGHT-PAD       /-/
+PADDING-CHAR    /./
+WIDTH           /[0-9]+/
+
+NO-RESET        /\+/
+NO-RESET-RETURN /-/
+ORDER           /![0-9]+/
+LINKED          /!l/
+404-TOLERANCE   /\*[0-9]+/
+QUIT-WHEN-FOUND /\*f/
+DIGITS          /\[([0-9]-[0-9]|[a-z]-[a-z]|[A-Z]-[A-Z]|\\-|.)+\]/
+LIMITS          /\{[0-9]*,[0-9]*\}/
+
+~~ Default values ~~
+
+RIGHT-PAD       False
+PADDING-CHAR    DIGITS[0]
+WIDTH           1
+
+ORDER           (Position in URL, 1 based, left to right)
+LINKED          False
+404-TOLERANCE   (Infinite)
+QUIT-WHEN-FOUND False
+DIGITS          "0123456789"
+LIMITS          DIGITS[1] , (Infinite)
