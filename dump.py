@@ -152,8 +152,8 @@ def main():
 
 	# TODO: Check stdin if no args are passed
 	if len(lArgs) == 0 or re.match(r'[\-/]([?h]|-?help)',lArgs[0]):
-		print("Dump v3 by Wa (logicplace.com)\n"+
-			("%s url [options]\n" % re.match("(?:.*/)?([^/]+)(?:\.py)?"
+		print("Dump v3 by Wa (logicplace.com)\n"
+			"%s url [options]\n"
 			" -o  Set the output folder. Default: Current directory\n"
 			" -f  Set the fileformat. Default: Extracted from URL\n"
 			" -s  Given URL is a webpage, that needs to be parsed for the link to download,\n"
@@ -161,7 +161,7 @@ def main():
 			" -c  Continue from the given string. Acceptable strings are shown before each\n"
 			"     download. Do not include the brackets.\n"
 			"See readme for detailed syntax information."
-			, sys.argv[0]).group(1))
+			% re.match("(?:.*/)?([^/]+)(?:\.py)?", sys.argv[0]).group(1)
 		)
 	else:
 		# Enumerate command line
