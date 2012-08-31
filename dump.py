@@ -39,6 +39,14 @@ class Counter(object):
 
 	digits_syntax = re.compile(r'([0-9a-zA-Z])-([0-9a-zA-Z])')
 
+	escape = re.compile(r'\\(.)')
+
+	@staticmethod
+	def unescape_digits(mo): return mo.group(1) if mo.group(1) in "\\-" else mo.group(0)
+
+	@staticmethod
+	def unescape_limits(mo): return mo.group(1) if mo.group(1) in "\\,}" else mo.group(0)
+
 	def __init__(self, counter, taken_orders):
 		tokens = Counter.syntax.match(counter).groups(None)
 		self.pad_right = bool(tokens[0])
@@ -58,6 +66,7 @@ class Counter(object):
 			#endfor
 		#endfor
 		self.digits += ranges[-1]
+		self.digits = Counter.escape.sub(Counter.unescape_digits, self.digits)
 		self.pad_char  = tokens[1] or self.digits[0]
 		self.pad_width = (int(tokens[2]) if tokens[2] else None)
 		self.name      = tokens[3]
@@ -69,8 +78,12 @@ class Counter(object):
 		#endif
 		self.on_found  = tokens[5] == "f"
 		self.error     = None if self.on_found else (int(tokens[5]) if tokens[5] else None)
-		self.value = self.lower = tokens[7] or (self.digits[0] if self.no_zero else self.digits[1])
-		self.upper     = tokens[8]
+		self.value = self.lower = (
+			Counter.escape.sub(Counter.unescape_limits, tokens[7])
+			if tokens[7] else
+			(self.digits[0] if self.no_zero else self.digits[1])
+		)
+		self.upper     = Counter.escape.sub(Counter.unescape_limits, tokens[8]) if tokens[8] else None
 		self.reset     = {None: 0, "+": 1, "-": 2}[tokens[9]]
 
 		self.first_error = None
