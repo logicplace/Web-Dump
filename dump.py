@@ -378,10 +378,10 @@ def main():
 	# Merge args from stdin with args from command line
 	args = sys.argv
 	if not sys.stdin.isatty():
-		args += reduce(
+		args = reduce(
 			(lambda x, y: x + y),
 			map((lambda x: x.rstrip().split(" ", 1)), sys.stdin.readlines())
-		)
+		) + args
 	#endif
 	options, args = parser.parse_args(args)
 	args = args[1:]
