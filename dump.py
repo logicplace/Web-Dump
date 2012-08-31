@@ -1,327 +1,515 @@
 #!/usr/bin/env python
 #-*- coding:utf-8 -*-
 
-import sys
-import os
 import re
+import os
+import sys
+import urllib
 import urllib2
-import traceback
+import mimetypes
 from random import randint as rand
+from urlparse import urlparse
+from optparse import OptionParser, SUPPRESS_HELP
 
-sOutFolder = "./"
-sFileFormat = "*"
-reLinkSearch = None
-iDebugLevel = 0
+# TODO: Extensively test HTTP error handling
+# TODO: -sp should download the page and scan for links, but only print urls
 
-def cast(x,y,bCanBeNone=True):
-	if type(y) in [list,tuple]:
-		tOrig = type(x)
-		x = list(x)
-		for iI in range(min(len(x),len(y))):
-			if x[iI] is not None or not bCanBeNone:
-				x[iI] = y[iI](x[iI])
-			#endif
-		#endfor
-		return tOrig(x)
-	elif type(y) is type:
-		return y(x)
-	else:
-		raise TypeError("Second argument must be a type or list of types.")
-	#endif
-#enddef
+class CounterError(Exception): pass
 
-def EnsureIndex(lX,iLen,vVal=None):
-	if iLen >= len(lX):
-		lX.extend([vVal] * (iLen+1 - len(lX)))
-	#endif
-#enddef
+class Counter(object):
+	"""
+	Handles counters in URLs
+	"""
 
-def IncVia(sNum,sDigits):
-	bDoBreak = False
-	for iI in range(len(sNum)-1,-1,-1):
-		iIdx = sDigits.find(sNum[iI])
-		if iIdx == len(sDigits)-1:
-			if sDigits[0] == '\0': iIdx = 1
-			else: iIdx = 0
-		else:
-			iIdx += 1
-			bDoBreak = True
-		#endif
-		sNum = sNum[:iI] + sDigits[iIdx] + sNum[iI+1:]
-		if bDoBreak: break
-	#endfor
-	if not bDoBreak: sNum = sDigits[min(1,len(sDigits))] + sNum
-	return sNum
-#enddef
+	# 1: Right-pad; 2: Padding char; 3: Width
+	# 4: Name
+	# 5: Order number (or l if linked); 6: 404 tolerance (or f if quit when found)
+	# 7: Digits; 8: Lower bound; 9: Upper bound; 10: Reset behavior
+	syntax = re.compile(
+		r'(?:(-??)(.?)([0-9]+))?' # FORMATTING: [RIGHT-PAD] [PADDING-CHAR] WIDTH
+		r'([a-zA-Z])'             # Name
+		r'(?:'                    # HowTo
+			r'(?:!([0-9]+|l))|'   # Order number or is a link
+			r'(?:\*([0-9]+|f))|'  # 404 tolerance or quit when found
+			r'(?:\[((?:[0-9]-[0-9]|[a-z]-[a-z]|[A-Z]-[A-Z]|\\-|\\|.)+)\])|' # Digits
+			r'(?:\{((?:[^,}]+|\\,|\\}|\\)+)?,((?:[^,}]+|\\,|\\}|\\)+)?\})|' # Limits
+			r'([+\-])'            # Don't reset the counter (second one is with returning)
+		r')*'                     # HowTos can be in any order, and are entirely optional
+	)
 
-reFmtOnly = re.compile(r'(?<!%)%(?!%)(?:(-)??(.)?([0-9]+))?([a-zA-Z])')
-def Format(sStr,dNumMap):
-	global reFmtOnly
-	def _Format(moX):
-		bRPad,sPadChar,iWidth,sName = cast(
-			moX.groups(),
-			[bool,str,int,str]
+	def __init__(self, counter, taken_orders):
+		tokens = Counter.syntax.match(counter).groups(None)
+		self.pad_right = bool(tokens[0])
+		self.no_zero   = tokens[6] and tokens[6][0] == "*"
+		self.digits    = (
+			tokens[6][1:]
+			if self.no_zero or tokens[6] and tokens[6][0] == "\\" else
+			tokens[6] or "0123456789"
 		)
-		if bRPad is None: bRPad = False
-		if sPadChar is None:
-			sPadChar = dNumMap[sName][2][2][0]
-			if sPadChar == '\0': sPadChar = ""
+		self.pad_char  = tokens[1] or self.digits[0]
+		self.pad_width = (int(tokens[2]) if tokens[2] else None)
+		self.name      = tokens[3]
+		self.linked    = tokens[4] == "l"
+		self.order     = None if self.linked else int(tokens[4] or 1)
+		if self.order:
+			while self.order in taken_orders: self.order += 1
+			taken_orders.append(self.order)
 		#endif
-		if iWidth is None: iWidth = 1
+		self.on_found  = tokens[5] == "f"
+		self.error     = None if self.on_found else (int(tokens[5]) if tokens[5] else None)
+		self.value = self.lower = tokens[7] or (self.digits[0] if self.no_zero else self.digits[1])
+		self.upper     = tokens[8]
+		self.reset     = {None: 0, "+": 1, "-": 2}[tokens[9]]
 
-		sRet = dNumMap[sName][0]
-		iDiff = iWidth-len(sRet)
-		if iDiff > 0:
-			sX = sPadChar * iDiff
-			if bRPad: sRet = sRet + sX
-			else: sRet = sX + sRet
-		#endif
-		return sRet
+		self.first_error = None
+		self.error_count = 0
 	#enddef
-	return reFmtOnly.sub(_Format,sStr).replace("%%","%")
-#enddef
 
-def DownloadFile(sUrl,dNumMap):
-	global sOutFolder,sFileFormat,reLinkSearch,iDebugLevel
-	lGroups=None
-	try:
-		if reLinkSearch is not None:
-			hUrl = urllib2.urlopen(sUrl)
-			sPage = hUrl.read()
-			hUrl.close()
-			moLink = reLinkSearch.search(sPage)
-			if moLink is not None:
-				sUrl = moLink.group(0)
-				lGroups = [""] + list(moLink.groups())
-			else:
-				sys.stderr.write("Link not found in: %s\n" % sUrl)
-				return 1
-			#endif
+	def link(self, counters):
+		if self.linked:
+			for x in counters:
+				if x.name == self.name and not x.linked:
+					self.linked = x
+					return
+				#endif
+			#endfor
+			raise CounterError(self.name, "Tried to link counter, but there was nothing to link with.")
 		#endif
-		if sFileFormat == "*": sFilename = sUrl[sUrl.rfind("/")+1:]
+	#enddef
+
+	def inc(self):
+		"""
+		Incriment value based on digits and etc.
+		Return True if the next counter should be incrimented, False if not.
+		"""
+
+		if self.linked: return False
+
+		# Check error status
+		if self.error is not None and self.error_count > self.error:
+			self.error_count = 0
+			if self.reset == 0: self.value = self.lower
+			elif self.reset == 2: self.value = self.first_error
+			self.first_error = None
+			return True
+		elif self.on_found and self.error_count == 0:
+			return True
+		#endif
+
+		# Check if this is at the max value
+		if self.upper and self.value == self.upper:
+			self.value = self.lower
+			return True
+		#endif
+
+		# Otherwise, incriment the digits
+		new_value, didnt_inc = "", True
+
+		for i in range(len(self.value) - 1, -1, -1):
+			if self.value[i] == self.digits[-1]:
+				# Roll over all maxed digits.
+				new_value = self.digits[0] + new_value
+			else:
+				# Incriment last digit, and copy whatever's left.
+				new_value = (
+					self.value[0:i]
+					+ self.digits[self.digits.index(self.value[i]) + 1]
+					+ new_value
+				)
+				didnt_inc = False
+				break
+			#endif
+		#endfor
+
+		# If we didn't incriment a final value (ie. all digits rolled over)
+		# then prepend a new digit.
+		if didnt_inc:
+			if self.no_zero: new_value = self.digits[0] + new_value
+			else: new_value = self.digits[1] + new_value
+		#endif
+
+		self.value = new_value
+		return False
+	#enddef
+
+	def result(self, error):
+		"""
+		Deals with the result of the last query.
+		"""
+		if self.linked: return
+		if error:
+			if self.first_error is None: self.first_error = self.value
+			self.error_count += 1
 		else:
-			sFilename = Format(sFileFormat,dNumMap)
-			if lGroups is not None:
-				for iX in range(len(lGroups)):
-					sFilename = sFilename.replace("#"+str(iX),lGroups[iX])
-				#endfor
-			#endif
-			sFilename = sFilename.replace("%%","%").replace("##","#")
+			self.first_error = None
+			self.error_count = 0
 		#endif
-		sFilename = sOutFolder + sFilename
-		print("[%s]" % (','.join(map(lambda x: x+":"+dNumMap[x][0],dNumMap))))
-		print("   Downloading: %s" % sUrl)
-		print("   To: %s" % sFilename)
-		try: os.makedirs(sFilename[0:sFilename.rfind("/")])
-		except OSError as err:
-			if err.errno != 17: raise
-		#endtry
-		hOut = open(sFilename,'wb')
-		hUrl = urllib2.urlopen(sUrl)
-		hOut.write(hUrl.read())
-		hUrl.close()
-		hOut.close()
-		return 0
-	except urllib2.HTTPError as err:
-		print("   HTTP Error: %i" % err.code)
-		#if err.code == 404: return 1
-		return 1
-	except urllib2.URLError:
-		traceback.print_exc()
-		return 2
-	except KeyboardInterrupt:
-		sys.exit()
-	except:
-		traceback.print_exc()
-		return 3
-	#endtry
-#enddef
+	#enddef
 
-def main():
-	global sOutFolder, sFileFormat, reLinkSearch, iDebugLevel
-	# Compound stdin and command line as arguments
-	lArgs = []
-	if not sys.stdin.isatty():
-		lTemp = sys.stdin.readlines()
-		lArgs.append(lTemp[0])
-		for sX in lTemp[1:]:
-			lArgs.extend(sX.strip().split(" ",1))
-		#endfor
+	def __unicode__(self):
+		"""
+		Returns string of value suitable for a URL
+		"""
+		if self.pad_width:
+			padding = self.pad_char * max(self.pad_width - len(self.true_value()), 0)
+			if self.pad_right: return urllib.quote(self.true_value()) + padding
+			else: return padding + urllib.quote(self.true_value())
+		else: return urllib.quote(self.true_value())
+	#enddef
+
+	def cont(self):
+		"""
+		Returns a string suitable for inclusion in a continuance operation
+		"""
+		if self.linked: return None
+		return self.name + ":" + self.value
+	#enddef
+
+	def true_value(self):
+		if self.linked: return self.linked.true_value()
+		else: return self.value
 	#endif
-	if len(sys.argv) > 1: lArgs.extend(sys.argv[1:])
 
-	# TODO: Check stdin if no args are passed
-	if len(lArgs) == 0 or re.match(r'[\-/]([?h]|-?help)',lArgs[0]):
-		print("Dump v3 by Wa (logicplace.com)\n"
-			"%s url [options]\n"
-			" -o  Set the output folder. Default: Current directory\n"
-			" -f  Set the fileformat. Default: Extracted from URL\n"
-			" -s  Given URL is a webpage, that needs to be parsed for the link to download,\n"
-			"     found by the given regex. Default is to just download the url.\n"
-			" -c  Continue from the given string. Acceptable strings are shown before each\n"
-			"     download. Do not include the brackets.\n"
-			"See readme for detailed syntax information."
-			% re.match("(?:.*/)?([^/]+)(?:\.py)?", sys.argv[0]).group(1)
+	def debug(self):
+		ret = u"%s:\n" % self.name
+		ret += " Digits: %s\n" % self.digits
+		if self.no_zero: ret += " There is no zero in this system\n"
+		if self.pad_width: ret += ' Padding: "%s" to %s on %s\n' % (
+			self.pad_char, self.pad_width, "right" if self.pad_right else "left"
 		)
-	else:
-		# Enumerate command line
-		sUrlFormat = lArgs[0]
-		sContinue = ""
-		for iI in range(1,len(lArgs),2):
-			if   lArgs[iI] == "-o": sOutFolder = lArgs[iI+1]
-			elif lArgs[iI] == "-f": sFileFormat = lArgs[iI+1]
-			elif lArgs[iI] == "-s": reLinkSearch = re.compile(lArgs[iI+1])
-			elif lArgs[iI] == "-d": iDebugLevel = int(lArgs[iI+1])
-			elif lArgs[iI] == "-c": sContinue = lArgs[iI+1]
-		#endfor
-
-		# TODO: OS independant
-		if sOutFolder[-1] not in ['/','\\']: sOutFolder += '/'
-
-		# Evaluate URL
-		lUrlFormat = re.split(r'(?<!%)%(?!%)((?:[^;\[\{]+|\[.*?(?<!\\)\]|\{.*?(?<!\\)\})+);',sUrlFormat)
-		dNumMap = {}
-		lOrder = [None] * ((len(lUrlFormat)-1) / 2)
-		reCounter = re.compile(
-			r'(-??.?[0-9]+)?' + # FORMATTING: [RIGHT-PAD] [PADDING-CHAR] WIDTH
-			r'([a-zA-Z])' + # Name
-			r'(?:' + # HowTo
-				r'(?:!([0-9]+|l))|' + # Order number or is a link
-				r'(?:\*([0-9]+|f))|' + # 404 tolerance or quit when found
-				r'(?:\[((?:[0-9]-[0-9]|[a-z]-[a-z]|[A-Z]-[A-Z]|\\-|\\|.)+)\])|' + # Digits
-				r'(?:\{((?:[^,}]+|\\,|\\}|\\)+)?,((?:[^,}]+|\\,|\\}|\\)+)?\})|' + # Limits
-				r'(\+|-)' + # Don't reset the counter (second one is with returning)
-			r')*' # HowTos can be in any order, and are entirely optional
+		if self.linked: ret += " Linked\n"
+		else: ret += " Order: %i\n" % self.order
+		if self.on_found: ret += " Reset on found\n"
+		elif self.error: ret += " Error tolerance: %i\n" % self.error
+		else: ret += " Error tolerance: infinite\n"
+		ret += " Count between %s and %s\n" % (
+			self.lower,
+			self.upper if self.upper else "infinity"
 		)
+		if self.reset == 0: ret += " Reset on maxed or errors\n"
+		elif self.reset == 1: ret += " Only reset when maxed\n"
+		elif self.reset == 2: ret += " Reset completely when maxed, reset to first error on errors\n"
+		ret += " Current value: %s\n" % self.true_value()
+		if self.first_error: ret += " Error stats: %i starting from %s\n" % (self.error_count, self.first_error)
 
-		def _Digits(moX):
-			iS,iF = tuple(map(ord,moX.group(0).split('-')))
-			return ''.join(map(chr,range(min(iS,iF),max(iS,iF)+1,1)))
-		#enddef
+		return ret.rstrip()
+	#endif
+#endclass
 
-		for iI in range(1,len(lUrlFormat),2):
-			moCounter = reCounter.match(lUrlFormat[iI])
-			if moCounter is None:
-				sys.stderr.write("Counter format invalid: %%%s;" % lUrlFormat[iI])
-				return
-			#endif
-			sFmt,sName,sOrder,s404,sDigits,sMin,sMax,sReset = moCounter.groups()
-			if sOrder != 'l':
-				if sDigits is None: sDigits = '0123456789'
-				if sDigits[0] == '*': sDigits = '\0' + sDigits[1:]
-				elif sDigits[0:2] == '\\*': sDigits = sDigits[1:]
-				sDigits = re.sub(r'[0-9]-[0-9]|[a-z]-[a-z]|[A-Z]-[A-Z]',_Digits,sDigits).replace("\\-","-").replace("\\\\","\\")
-				if sOrder is None: sOrder = str((iI+1) / 2)
-				if s404 is None: s404 = '0'
-				if sMin is None: sMin = sDigits[min(1,len(sDigits))]
-				if s404 == 'f':
-					i404 = None
-					bQuitOnFound = True
-				else:
-					i404 = int(s404)
-					bQuitOnFound = False
-				#endif
+class Marker(object):
+	"""
+	Handles dynamic pieces of filenames
+	"""
 
-				dNumMap[sName] = [
-					sMin,[0,''], # Current index
-					[sMin,sMax,sDigits], # Starting, Maximum or None for infinite, Digit list
-					#[bRPad,sPadChar,iWidth], # Formatting
-					[bQuitOnFound,i404], # Existence handling
-					["None","+","-"].index(str(sReset))
-				]
+	# 1: Right-align; 2: Pad char; 3: Padding width
+	# 4: Group index; 5: Unique index
+	syntax = re.compile(
+		r'%'
+			r'(?:(-??)(.?)([0-9]+))?'
+			r'([a-zA-Z])'
+		r'|#'
+			r'([0-9]+)'
+		'|#(i)'
+	)
 
-				iOrder = int(sOrder)
-				EnsureIndex(lOrder,iOrder)
-				lOrder[iOrder] = sName
-			#endif
+	def __init__(self, marker):
+		tokens = Marker.syntax.match(marker).groups(None)
+		if tokens[4]:
+			self.type = 2
+			self.group = int(tokens[4])
+		elif tokens[3]:
+			self.type = 1
+			self.pad_right = bool(tokens[0])
+			self.pad_char = tokens[1] or ""
+			self.pad_width = int(tokens[2]) if tokens[2] else None
+			self.name = tokens[3]
+		else: self.type = 3
+	#endif
 
-			if sFmt is None: sFmt = ""
-			lUrlFormat[iI] = sFmt + sName
-		#endfor
-
-		sUrlFormat = ""
-		for iI in range(1,len(lUrlFormat),2):
-			sUrlFormat += lUrlFormat[iI-1] + "%" + lUrlFormat[iI]
-		#endfor
-		sUrlFormat += lUrlFormat[-1]
-
-		# Collapse lOrder
-		for iI in range(lOrder.count(None)): lOrder.remove(None)
-
-		# Parse and apply continuance
-		def _Continue(moX):
-			sName,sCont = moX.groups()
-			dNumMap[sName][0] = sCont
-		#enddef
-		re.sub(r'(?:^|,)([a-zA-Z]):([^,]+)',_Continue,sContinue)
-
-		# Begin dumpage!
-		if iDebugLevel >= 2:
-			print('(Debug) sUrlFormat = "%s"' % sUrlFormat)
-			print('(Debug) lOrder = "%s"' % lOrder)
-			print('(Debug) dNumMap = "%s"' % dNumMap)
-		#endif
-		sLastInc = lOrder[0]
-		while True:
-			# Construct URL and download
-			sUrl = Format(sUrlFormat,dNumMap)
-			iRet = 0
-			if iDebugLevel >= 3:
-				if iDebugLevel >= 4: iRet = rand(0,1)
-				print('(Debug) sUrl = "%s"%s' % (sUrl,{True:" (404)",False:""}[bool(iRet)]))
-			else: iRet = DownloadFile(sUrl,dNumMap)
-
-			# Increase 404s (errors, technically) if necessary
-			if iRet != 0:
-				dNumMap[sLastInc][1][0] += 1
-				if dNumMap[sLastInc][1][1] == '':
-					dNumMap[sLastInc][1][1] = dNumMap[sLastInc][0]
-				#endif
-			else:
-				# Reset 404s
-				dNumMap[sLastInc][1][0] = 0
-				dNumMap[sLastInc][1][1] = ''
-			#endif
-
-			bDid404Out = False
-			# Check 404s on sLastInc
-			if  (dNumMap[sLastInc][3][0] and dNumMap[sLastInc][1][0] == 0) or \
-			(not dNumMap[sLastInc][3][0] and dNumMap[sLastInc][3][1] != 0 and \
-			dNumMap[sLastInc][1][0] >= dNumMap[sLastInc][3][1]):
-				if iDebugLevel >= 2: print('(Debug) Counter %s met its 404 critria' % sLastInc)
-				iIdx = lOrder.index(sLastInc)
-				# Last counter 404'd out
-				if iIdx == len(lOrder)-1: break
-				# Restart counter (if allowed)
-				if dNumMap[sLastInc][4] == 0: dNumMap[sLastInc][0] = dNumMap[sLastInc][2][0]
-				elif dNumMap[sLastInc][4] == 2: dNumMap[sLastInc][0] = dNumMap[sLastInc][1][1]
-				# Reset 404s
-				dNumMap[sLastInc][1][0] = 0
-				dNumMap[sLastInc][1][1] = ''
-				# Prepare to inc the next counter
-				sLastInc = lOrder[iIdx+1]
-				bDid404Out = True
-			#endif
-			# Check if maximum has been reached
-			bBroken = False
-			for iI in range(lOrder.index(sLastInc) if bDid404Out else 0,len(lOrder)):
-				sI = lOrder[iI]
-				sLastInc = sI
-				if dNumMap[sI][0] == dNumMap[sI][2][1]: # If cur == max:
-					if iDebugLevel >= 2: print('(Debug) Counter %s maxed out' % sI)
-					# Restart counter
-					dNumMap[sI][0] = dNumMap[sI][2][0]
-				else:
-					bBroken = True
+	def form(self, groups, counters):
+		if self.type == 1:
+			counter = None
+			for x in counters:
+				if x.name == self.name and not x.linked:
+					counter = x
 					break
 				#endif
 			#endfor
-			if not bBroken: break # Max for last counter was reached
-
-			# Inc sLastInc
-			dNumMap[sLastInc][0] = IncVia(dNumMap[sLastInc][0],dNumMap[sLastInc][2][2])
-		#endwhile
+			if not counter: return ""
+			if self.pad_width:
+				padding = self.pad_char * max(self.pad_width - len(counter.true_value()), 0)
+				if pad_right: return counter.true_value() + padding
+				else: return padding + counter.true_value()
+			else: return counter.true_value()
+		elif self.type == 2: return groups[self.group]
+		elif self.type == 3: return groups[0]
 	#endif
+
+	def __unicode__(self): return self.form([])
+#endclass
+
+# 1: Counter
+url_syntax = re.compile(r'(?<!%)%(?!%)((?:\[(?:\\.|[^\]])*\]|\{(?:\\.|[^\}])*\}|[^;])+);')
+def parse_url(url):
+	"""
+	Parses the counters from the URL.
+	Returns a list alternating literal text and counters.
+	"""
+	splitted = url_syntax.split(url)
+
+	orders = []
+	for i in range(len(splitted)):
+		if i % 2 == 0: splitted[i] = splitted[i].replace("%%", "%")
+		else: splitted[i] = Counter(splitted[i], orders)
+	#endfor
+
+	return splitted
 #enddef
 
-main()
+marker_syntax = re.compile(r'(%(?:-??.?[0-9]+)?[a-zA-Z]|#[0-9]+|#i);?')
+def parse_filename(filename):
+	splitted = marker_syntax.split(filename)
+
+	for i in range(len(splitted)):
+		if i % 2 == 0: splitted[i] = splitted[i].replace("%%", "%").replace("##", "#")
+		else: splitted[i] = Marker(splitted[i])
+	#endfor
+
+	return splitted
+#enddef
+
+mime2ext_overrides = {
+	"text/plain": ".txt",
+	"image/jpeg": ".jpg",
+}
+def download_file(url, filename=None):
+	"""
+	Download contents of page at url to filename
+	Return if successful
+	"""
+	data, mime = download_page(url, True)
+	if data is None: return False
+
+	# Ensure necessary directories exist
+	try: os.makedirs(os.path.dirname(filename))
+	except OSError as err:
+		if err.errno == 17: pass
+	#endtry
+
+	# Make filename if necessary
+	if not filename:
+		url = urllib.unquote(urlparse(url).path)
+		filename = url[url.rfind("/") + 1:]
+		if "." not in filename:
+			if mime in mime2ext_overrides: filename += mime2ext_overrides[mine]
+			else: filename += mimetypes.guess_extension(mime, False)
+		#endif
+	#endif
+
+	# Write file
+	print(u"   To: %s" % filename)
+	f = open(filename, "w")
+	f.write(data)
+	f.close()
+	return True
+#enddef
+
+def download_page(url, return_mime=False, return_baseurl=False):
+	"""
+	Download page and return contents
+	"""
+	print(u"   Downloading: %s" % url)
+	try:
+		handle = urllib2.urlopen(url)
+		ret = handle.read()
+		if return_mime: mime = (lambda x: x.getmaintype() + "/" + x.getsubtype())(handle.info())
+		if return_baseurl: baseurl = handle.geturl()
+		handle.close()
+		if return_baseurl: return (ret, baseurl)
+		if return_mime: return (ret, mime)
+		return ret
+	except urllib2.HTTPError as err:
+		print(u"   HTTP Error: %i" % err.code)
+	#endtry
+	if return_mime: return None, None
+	return None
+#enddef
+
+def notNone(element): return element is not None
+
+def ordinal(num):
+	num = str(num)
+	if not num: num == "0th"
+	elif len(num) >= 2 and num[-1] == "1": num += "th"
+	elif num[-1] == "1": num += "st"
+	elif num[-1] == "2": num += "nd"
+	elif num[-1] == "3": num += "rd"
+	else: num += "th"
+	return num
+#enddef
+
+def main():
+	parser = OptionParser(version="4",
+		description="Dump v4 by Wa (logicplace.com)\n",
+		usage="Usage: %prog [options] address [address...]"
+	)
+	parser.add_option("-o", "--folder", default=os.curdir,
+		help="Set the output folder. Default: Current directory"
+	)
+	parser.add_option("-f", "--filename", default="*",
+		help="Set the filename format. Default: Extracted from URL"
+	)
+	parser.add_option("-s", "--scan",
+		help="Given URL is a webpage, that needs to be parsed for the link to"
+		" download, found by the given regex. Default is to just download the url."
+	)
+	parser.add_option("-c", "--continue", dest="cont",
+		help="Continue from the given string. Acceptable strings are shown"
+		" before each download. Do not include the brackets."
+	)
+	parser.add_option("-p", "--print-urls", action="store_true",
+		help="Rather than download anything, simply print the URLs. "
+		"Note that this does not check for existence."
+	)
+	parser.add_option("-d", action="count", dest="debug",
+		help=SUPPRESS_HELP
+	)
+
+	# Merge args from stdin with args from command line
+	args = sys.argv
+	if not sys.stdin.isatty():
+		args += reduce(
+			(lambda x, y: x + y),
+			map((lambda x: x.rstrip().split(" ", 1)), sys.stdin.readlines())
+		)
+	#endif
+	options, args = parser.parse_args(args)
+	args = args[1:]
+
+	if len(args) == 0 or args[0] in ["/?", "/h"]:
+		parser.print_help()
+		return 0
+	#endif
+
+	options.folder = os.path.normpath(options.folder)
+
+	# Parse the given URLs
+	parsed = map(parse_url, args)
+
+	# Order the counters
+	counters = []
+	for url in parsed:
+		counters.append(sorted(
+			[url[i] for i in range(1, len(url), 2)],
+			key=lambda x: x.order
+		))
+	#endfor
+
+	# Split countinue string up
+	start = 0
+	if options.cont:
+		continuing = dict(map(lambda x: tuple(x.split(":", 1)), options.cont.split(",")))
+		if "link" in continuing: start = int(continuing["link"])
+	#endif
+
+	# Make sure things that need to be linked up are
+	for counter in counters:
+		for x in counter:
+			x.link(counter)
+			if options.cont and x.name in continuing: x.value = continuing[x.name]
+		#endfor
+	#endfor
+
+	if options.debug == 2:
+		for i, url in enumerate(parsed):
+			print "=== URL: %s ===" % ''.join(map(
+				(lambda x: x if type(x) in [str, unicode] else "%" + x.name + ";"),
+				url
+			))
+			print "\n".join([x.debug() for x in counters[i]])
+		#endfor
+	#endif
+
+	# Parse the given filename
+	if options.filename: fileform = parse_filename(options.filename)
+	else: fileform = None
+
+	# TODO: Debug thing for filename
+
+	# Compile the scan
+	if options.scan:
+		scan_group = re.match(r'(.*)\|([0-9]+)$', options.scan)
+		if scan_group:
+			scan = re.compile(scan_group.group(1))
+			scan_group = int(scan_group.group(2))
+		else:
+			scan = re.compile(options.scan)
+			scan_group = 0
+		#endif
+	else: scan = None
+
+	if options.debug: print "Starting from %s url" % ordinal(start)
+	for idx, url_parts in enumerate(parsed):
+		if idx < start: continue
+		counter = counters[idx]
+		increased = counter[0] if counter else None
+		last = True # This is for static URLs that don't need to loop
+		while True:
+			# Construct URL string
+			url = ''.join(map(unicode, url_parts))
+
+			if options.print_urls: print url
+			else:
+				# Attempt download
+				print "[%s]" % ",".join(
+					["link:%i" % idx if len(parsed) > 1 else ""] +
+					filter(notNone, map(lambda x: x.cont(), counter))
+				)
+				if scan:
+					page, baseurl = download_page(url, return_baseurl=True)
+					if page is None: error = True
+					else:
+						error, i = False, 0
+						baseurl, basepath = (lambda x: (
+							"%s://%s" % (x.scheme, x.netloc),
+							x.path[0:x.path.rfind("/")] + "/"
+						))(urlparse(baseurl))
+						for x in scan.finditer(page):
+							args = [unicode(i)] + list(x.groups())
+							filename = ''.join(map(
+								lambda y: y.form(args, counter) if isinstance(y, Marker) else y,
+								fileform
+							))
+							download = x.group(scan_group)
+							if "://" not in download:
+								if download[0] == "/": download = baseurl + download
+								else: download = baseurl + basepath + download
+							#endif
+							# TODO: Pass url as the referrer
+							download_file(download, filename)
+							i += 1
+						#endfor
+					#endif
+				else: error = not download_file(url, ''.join(map(unicode, fileform)))
+				# TODO: Not sure how to distribute blame at the moment
+				# So yeah this is just a trial I guess
+				if increased: increased.result(error)
+			#endif
+
+			# Increase counters
+			for increased in counter:
+				last = increased.inc()
+				if not last: break
+			#endfor
+
+			# If the last counter tries to increase the next counter, we're done
+			if last: break
+		#endwhile
+	#endfor
+#endif
+
+if __name__ == "__main__":
+	try: sys.exit(main())
+	except CounterError as err: print "Fatal error in counter %s: %s" % err.args
+	except (EOFError, KeyboardInterrupt): print "\nProgram terminated"
+#endif
