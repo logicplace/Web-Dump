@@ -43,9 +43,10 @@ Counters are formatted as so:
      beginning of the range. If you want a literal asterisk for the 0th digit,
      you may escape the asterisk with a backslash like above.
      Examples:
-      [a-f]   a, b, ..., f, ba, bb
-      [*a-f]  a, b, ..., f, aa, ab
-      [\*a-f] a, b, ..., f, a*, aa
+      [a-f]    b, c, ..., f, ba, bb
+      [*a-f]   a, b, ..., f, aa, ab
+      [\*a-f]  a, b, ..., f, a*, aa
+      [\\*a-f] \, *, ..., f, *\, **
      Any invalid ranges or blackslashes will be treated literally.
      By default this is decimal, ie. [0123456789]
  4d) Range, surrounded by braces ({ and }) You supply the starting index and
@@ -59,18 +60,21 @@ Counters are formatted as so:
      incriment the next counter.
      Alternatively, use a minus sign (-) to do the same but also reset the
      counter to the first attempt that failed in the current failure sequence.
-     Example: You have counters %a!2; and %b!1*1+; and it goes something like 
+     Example: You have counters %a!2; and %b!1*1+; and it goes something like
      this
       [a:1,b:1] , [a:1,b:2] , [a:1,b:3] (404s!) , [a:2,b:3] , [a:2,b:4] , ...
      Example for %a!2; and %b!1*2-;
-      [a:1,b:1] , [a:1,b:2] (404s!) , [a:1.b:3] , [a:1,b:4] (404s!) , 
-      [a:1,b:5] (404s!) , [a:2,b:4] , [a:2,b:5] , ... 
+      [a:1,b:1] , [a:1,b:2] (404s!) , [a:1.b:3] , [a:1,b:4] (404s!) ,
+      [a:1,b:5] (404s!) , [a:2,b:4] , [a:2,b:5] , ...
      However, the counter will restart if it reaches the max, regardless of the
      existence of + or -
  5) End with a semicolon (;)
 
 ==== Search URL Syntax ====
 This is just regex. If you need regex help try http://regular-expressions.info
+If you are searching for more than just the url, you can indicate which group
+is the url by appending | then the group number, eg. |1
+Group 0 is the default.
 
 ==== Filename Syntax ====
 When specifying a custom filename, you can use parts 1 through 3 from the URL
@@ -78,6 +82,8 @@ syntax specification. That is, the percent (%), formatting, and name. No
 semicolon.
 If you supplied a search URL, you can address the groups you made in that with
 a pound sign (#) followed by the group number.
+The special sequence #i and group 0 (ie. #0) refer to the index of the match on
+the page. The first match is 0 and the second is 1 and so-on.
 
 ==== Continue Syntax ====
 When using the continue option, specify the counters and their starting
@@ -85,9 +91,15 @@ position in the form: NAME : STARTING
 Separate each counter by commas.
 Example: a:1,b:2 starts counter a at 1 and b at 2
 If you don't specify a counter it will use its default starting value.
+The special name "link" will indicate which link in the list to start from,
+0-based.
 Generally you won't need to know this but I figured it'd be good to mention!
 
 ==== Changelog ====
+v4 Rewrote from scratch
+ * Now allows \ and * as the 0th and 1st digits with another \ prefix, ie. [\\*]
+ * Added #i and #0 in filename as being the index of the link found on the page
+ * Added group selector for scanning
 v3 Added the return variation of no-reset (-)
  * Fixed a bug with how 404 tolerance was handled
  * Fixed a bug that caused a counter to not max out if it had been increased
