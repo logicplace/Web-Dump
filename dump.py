@@ -331,7 +331,7 @@ def download_page(url, return_mime=False, return_baseurl=False):
 	except urllib2.HTTPError as err:
 		print(u"   HTTP Error: %i" % err.code)
 	#endtry
-	if return_mime: return None, None
+	if return_mime or return_baseurl: return None, None
 	return None
 #enddef
 
