@@ -37,6 +37,8 @@ class Counter(object):
 		r')*'                     # HowTos can be in any order, and are entirely optional
 	)
 
+	digits_syntax = re.compile(r'([0-9a-zA-Z])-([0-9a-zA-Z])')
+
 	def __init__(self, counter, taken_orders):
 		tokens = Counter.syntax.match(counter).groups(None)
 		self.pad_right = bool(tokens[0])
@@ -46,6 +48,16 @@ class Counter(object):
 			if self.no_zero or tokens[6] and tokens[6][0] == "\\" else
 			tokens[6] or "0123456789"
 		)
+		ranges = Counter.digits_syntax.split(self.digits)
+		self.digits = ""
+		for i in range(0, len(ranges) - 1, 3):
+			self.digits += ranges[i]
+			start, end = ord(ranges[i + 1]), ord(ranges[i + 2])
+			for o in (range(start, end + 1) if end >= start else range(start, end - 1, -1)):
+				self.digits += chr(o)
+			#endfor
+		#endfor
+		self.digits += ranges[-1]
 		self.pad_char  = tokens[1] or self.digits[0]
 		self.pad_width = (int(tokens[2]) if tokens[2] else None)
 		self.name      = tokens[3]
