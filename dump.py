@@ -312,14 +312,9 @@ def download_file(url, filename=None):
 	Download contents of page at url to filename
 	Return if successful
 	"""
+	# Download the data
 	data, mime = download_page(url, True)
 	if data is None: return False
-
-	# Ensure necessary directories exist
-	try: os.makedirs(os.path.dirname(filename))
-	except OSError as err:
-		if err.errno == 17: pass
-	#endtry
 
 	# Make filename if necessary
 	if not filename:
@@ -330,6 +325,12 @@ def download_file(url, filename=None):
 			else: filename += mimetypes.guess_extension(mime, False)
 		#endif
 	#endif
+
+	# Ensure necessary directories exist
+	try: os.makedirs(os.path.dirname(filename))
+	except OSError as err:
+		if err.errno == 17: pass
+	#endtry
 
 	# Write file
 	print(u"   To: %s" % filename)
@@ -381,7 +382,7 @@ def main():
 	parser.add_option("-o", "--folder", default=os.curdir,
 		help="Set the output folder. Default: Current directory"
 	)
-	parser.add_option("-f", "--filename", default="*",
+	parser.add_option("-f", "--filename",
 		help="Set the filename format. Default: Extracted from URL"
 	)
 	parser.add_option("-s", "--scan",
@@ -487,7 +488,7 @@ def main():
 			else:
 				# Attempt download
 				print "[%s]" % ",".join(
-					["link:%i" % idx if len(parsed) > 1 else ""] +
+					(["link:%i" % idx] if len(parsed) > 1 else []) +
 					filter(notNone, map(lambda x: x.cont(), counter))
 				)
 				if scan:
@@ -501,10 +502,12 @@ def main():
 						))(urlparse(baseurl))
 						for x in scan.finditer(page):
 							args = [unicode(i)] + list(x.groups())
-							filename = ''.join(map(
-								lambda y: y.form(args, counter) if isinstance(y, Marker) else y,
-								fileform
-							))
+							if fileform:
+								filename = ''.join(map(
+									lambda y: y.form(args, counter) if isinstance(y, Marker) else y,
+									fileform
+								))
+							else: filename = None
 							download = x.group(scan_group)
 							if "://" not in download:
 								if download[0] == "/": download = baseurl + download
@@ -515,7 +518,7 @@ def main():
 							i += 1
 						#endfor
 					#endif
-				else: error = not download_file(url, ''.join(map(unicode, fileform)))
+				else: error = not download_file(url, ''.join(map(unicode, fileform)) if fileform else None)
 				# TODO: Not sure how to distribute blame at the moment
 				# So yeah this is just a trial I guess
 				if increased: increased.result(error)
