@@ -307,7 +307,7 @@ mime2ext_overrides = {
 	"text/plain": ".txt",
 	"image/jpeg": ".jpg",
 }
-def download_file(url, filename=None):
+def download_file(url, filename=None, domime=True):
 	"""
 	Download contents of page at url to filename
 	Return if successful
@@ -320,8 +320,8 @@ def download_file(url, filename=None):
 	if not filename:
 		url = urllib.unquote(urlparse(url).path)
 		filename = url[url.rfind("/") + 1:]
-		if "." not in filename:
-			if mime in mime2ext_overrides: filename += mime2ext_overrides[mine]
+		if domime and "." not in filename:
+			if mime in mime2ext_overrides: filename += mime2ext_overrides[mime]
 			else: filename += mimetypes.guess_extension(mime, False)
 		#endif
 	#endif
@@ -375,8 +375,8 @@ def ordinal(num):
 #enddef
 
 def main():
-	parser = OptionParser(version="4",
-		description="Dump v4 by Wa (logicplace.com)\n",
+	parser = OptionParser(version="5",
+		description="Dump v5 by Wa (logicplace.com)\n",
 		usage="Usage: %prog [options] address [address...]"
 	)
 	parser.add_option("-o", "--folder", default=os.curdir,
@@ -396,6 +396,14 @@ def main():
 	parser.add_option("-p", "--print-urls", action="store_true",
 		help="Rather than download anything, simply print the URLs. "
 		"Note that this does not check for existence."
+	)
+	parser.add_option("-P", "--print-scans", action="store_true",
+		help="Download the page, scan it for URLs, and only print those. "
+		"Note that this does not check for existence of the files."
+	)
+	parser.add_option("-m", "--dont-mime-ext", action="store_true",
+		help="When automatically making filenames, "
+		"don't guess missing extensions by mime-type."
 	)
 	parser.add_option("-d", action="count", dest="debug",
 		help=SUPPRESS_HELP
@@ -474,6 +482,8 @@ def main():
 		#endif
 	else: scan = None
 
+	domime = not options.dont_mime_ext
+
 	if options.debug: print "Starting from %s url" % ordinal(start)
 	for idx, url_parts in enumerate(parsed):
 		if idx < start: continue
@@ -514,11 +524,12 @@ def main():
 								else: download = baseurl + basepath + download
 							#endif
 							# TODO: Pass url as the referrer
-							download_file(download, filename)
+							if options.print_scans: print download
+							else: download_file(download, filename, domime)
 							i += 1
 						#endfor
 					#endif
-				else: error = not download_file(url, ''.join(map(unicode, fileform)) if fileform else None)
+				else: error = not download_file(url, ''.join(map(unicode, fileform)) if fileform else None, domime)
 				# TODO: Not sure how to distribute blame at the moment
 				# So yeah this is just a trial I guess
 				if increased: increased.result(error)

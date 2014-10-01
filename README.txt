@@ -96,6 +96,9 @@ The special name "link" will indicate which link in the list to start from,
 Generally you won't need to know this but I figured it'd be good to mention!
 
 ==== Changelog ====
+v5 Added ability to print scanned URLs with -P
+ * Suppress adding extensions based on mime-type with -m
+ * Fixed bug when looking up mime type renaming.
 v4 Rewrote from scratch
  * Now allows \ and * as the 0th and 1st digits with another \ prefix, ie. [\\*]
  * Added #i and #0 in filename as being the index of the link found on the page
