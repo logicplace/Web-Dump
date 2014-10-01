@@ -12,9 +12,9 @@ from urlparse import urlparse
 from optparse import OptionParser, SUPPRESS_HELP
 
 # TODO: Extensively test HTTP error handling
-# TODO: -sp should download the page and scan for links, but only print urls
 
 class CounterError(Exception): pass
+class MarkerError(Exception): pass
 
 class Counter(object):
 	"""
@@ -193,7 +193,7 @@ class Counter(object):
 	def true_value(self):
 		if self.linked: return self.linked.true_value()
 		else: return self.value
-	#endif
+	#enddef
 
 	def debug(self):
 		ret = u"%s:\n" % self.name
@@ -218,7 +218,7 @@ class Counter(object):
 		if self.first_error: ret += " Error stats: %i starting from %s\n" % (self.error_count, self.first_error)
 
 		return ret.rstrip()
-	#endif
+	#enddef
 #endclass
 
 class Marker(object):
@@ -226,18 +226,21 @@ class Marker(object):
 	Handles dynamic pieces of filenames
 	"""
 
-	# 1: Right-align; 2: Pad char; 3: Padding width
-	# 4: Group index; 5: Unique index
+	# 1: Right-align; 2: Pad char; 3: Padding width; 4: Name
+	# 5: Group index; 6: Unique index
+	# 7: URL level index; 8: URL level final range index; 9: Continue to end marker
 	syntax = re.compile(
 		r'%'
 			r'(?:(-??)(.?)([0-9]+))?'
 			r'([a-zA-Z])'
 		r'|#'
 			r'([0-9]+)'
-		'|#(i)'
+		r'|#(i)'
+		r'|@(-?[0-9]+)(?:-(-?[0-9]+)|(\+))?'
 	)
 
 	def __init__(self, marker):
+		self.marker = marker
 		tokens = Marker.syntax.match(marker).groups(None)
 		if tokens[4]:
 			self.type = 2
@@ -248,10 +251,19 @@ class Marker(object):
 			self.pad_char = tokens[1] or ""
 			self.pad_width = int(tokens[2]) if tokens[2] else None
 			self.name = tokens[3]
+		elif tokens[6]:
+			self.type = 4
+			self.index = int(tokens[6])
+			if tokens[7]:
+				self.end = int(tokens[7])
+				if self.index < 0 and self.end > 0: self.end = -self.end
+			else: self.end = None
+			if tokens[8]: self.tail = True
+			else: self.tail = False
 		else: self.type = 3
-	#endif
+	#enddef
 
-	def form(self, groups, counters):
+	def form(self, groups, counters, url):
 		if self.type == 1:
 			counter = None
 			for x in counters:
@@ -268,9 +280,17 @@ class Marker(object):
 			else: return counter.true_value()
 		elif self.type == 2: return groups[self.group]
 		elif self.type == 3: return groups[0]
-	#endif
-
-	def __unicode__(self): return self.form([])
+		elif self.type == 4:
+			urlbits = (url[url.index("://") + 3:] if "://" in url else url).split("/")[1:]
+			try:
+				if self.tail: return "/".join(urlbits[self.index:])
+				elif self.end is not None: return "/".join(urlbits[self.index : self.end])
+				else: return urlbits[self.index]
+			except IndexError:
+				raise MarkerError(self.marker, "Indexing error on URL, only %i levels." % length(urlbits))
+			#endtry
+		#endif
+	#enddef
 #endclass
 
 # 1: Counter
@@ -291,12 +311,12 @@ def parse_url(url):
 	return splitted
 #enddef
 
-marker_syntax = re.compile(r'(%(?:-??.?[0-9]+)?[a-zA-Z]|#[0-9]+|#i);?')
+marker_syntax = re.compile(r'((?<!%)%(?:-??.?[0-9]+)?[a-zA-Z]|(?<!#)#[0-9]+|(?<!#)#i|(?<!@)@-?[0-9]+(?:--?[0-9]+|\+));?')
 def parse_filename(filename):
 	splitted = marker_syntax.split(filename)
 
 	for i in range(len(splitted)):
-		if i % 2 == 0: splitted[i] = splitted[i].replace("%%", "%").replace("##", "#")
+		if i % 2 == 0: splitted[i] = splitted[i].replace("%%", "%").replace("##", "#").replace("@@", "@")
 		else: splitted[i] = Marker(splitted[i])
 	#endfor
 
@@ -307,20 +327,20 @@ mime2ext_overrides = {
 	"text/plain": ".txt",
 	"image/jpeg": ".jpg",
 }
-def download_file(url, filename=None, domime=True):
+def download_file(url, filename):
 	"""
 	Download contents of page at url to filename
 	Return if successful
 	"""
 	# Download the data
-	data, mime = download_page(url, True)
+	data, mime = download_page(url, return_mime=True)
 	if data is None: return False
 
 	# Make filename if necessary
 	if not filename:
 		url = urllib.unquote(urlparse(url).path)
 		filename = url[url.rfind("/") + 1:]
-		if domime and "." not in filename:
+		if not options.dont_mime_ext and "." not in filename:
 			if mime in mime2ext_overrides: filename += mime2ext_overrides[mime]
 			else: filename += mimetypes.guess_extension(mime, False)
 		#endif
@@ -333,7 +353,7 @@ def download_file(url, filename=None, domime=True):
 	#endtry
 
 	# Write file
-	print(u"   To: %s" % filename)
+	print_info(u"   To: %s" % filename)
 	f = open(filename, "w")
 	f.write(data)
 	f.close()
@@ -344,7 +364,7 @@ def download_page(url, return_mime=False, return_baseurl=False):
 	"""
 	Download page and return contents
 	"""
-	print(u"   Downloading: %s" % url)
+	print_info(u"   Downloading: %s" % url)
 	try:
 		handle = urllib2.urlopen(url)
 		ret = handle.read()
@@ -355,7 +375,7 @@ def download_page(url, return_mime=False, return_baseurl=False):
 		if return_mime: return (ret, mime)
 		return ret
 	except urllib2.HTTPError as err:
-		print(u"   HTTP Error: %i" % err.code)
+		print_err(u"   HTTP Error: %i" % err.code)
 	#endtry
 	if return_mime or return_baseurl: return None, None
 	return None
@@ -366,7 +386,7 @@ def notNone(element): return element is not None
 def ordinal(num):
 	num = str(num)
 	if not num: num == "0th"
-	elif len(num) >= 2 and num[-1] == "1": num += "th"
+	elif len(num) >= 2 and num[-2] == "1": num += "th"
 	elif num[-1] == "1": num += "st"
 	elif num[-1] == "2": num += "nd"
 	elif num[-1] == "3": num += "rd"
@@ -374,7 +394,17 @@ def ordinal(num):
 	return num
 #enddef
 
+def print_err(err): sys.stderr.write(str(err) + "\n")
+
+def print_info(info):
+	if options.print_urls or options.print_scans: sys.stderr.write(str(info) + "\n")
+	else: print(info)
+#enddef
+
+def print_data(data): print(data)
+
 def main():
+	global options
 	parser = OptionParser(version="5",
 		description="Dump v5 by Wa (logicplace.com)\n",
 		usage="Usage: %prog [options] address [address...]"
@@ -412,10 +442,10 @@ def main():
 	# Merge args from stdin with args from command line
 	args = sys.argv
 	if not sys.stdin.isatty():
-		args = reduce(
+		args = args + reduce(
 			(lambda x, y: x + y),
 			map((lambda x: x.rstrip().split(" ", 1)), sys.stdin.readlines())
-		) + args
+		)
 	#endif
 	options, args = parser.parse_args(args)
 	args = args[1:]
@@ -456,11 +486,11 @@ def main():
 
 	if options.debug == 2:
 		for i, url in enumerate(parsed):
-			print "=== URL: %s ===" % ''.join(map(
+			print_info("=== URL: %s ===" % ''.join(map(
 				(lambda x: x if type(x) in [str, unicode] else "%" + x.name + ";"),
 				url
-			))
-			print "\n".join([x.debug() for x in counters[i]])
+			)))
+			print_info("\n".join([x.debug() for x in counters[i]]))
 		#endfor
 	#endif
 
@@ -482,8 +512,6 @@ def main():
 		#endif
 	else: scan = None
 
-	domime = not options.dont_mime_ext
-
 	if options.debug: print "Starting from %s url" % ordinal(start)
 	for idx, url_parts in enumerate(parsed):
 		if idx < start: continue
@@ -494,13 +522,13 @@ def main():
 			# Construct URL string
 			url = ''.join(map(unicode, url_parts))
 
-			if options.print_urls: print url
+			if options.print_urls: print_data(url)
 			else:
 				# Attempt download
-				print "[%s]" % ",".join(
+				print_info("[%s]" % ",".join(
 					(["link:%i" % idx] if len(parsed) > 1 else []) +
 					filter(notNone, map(lambda x: x.cont(), counter))
-				)
+				))
 				if scan:
 					page, baseurl = download_page(url, return_baseurl=True)
 					if page is None: error = True
@@ -512,24 +540,24 @@ def main():
 						))(urlparse(baseurl))
 						for x in scan.finditer(page):
 							args = [unicode(i)] + list(x.groups())
-							if fileform:
-								filename = ''.join(map(
-									lambda y: y.form(args, counter) if isinstance(y, Marker) else y,
-									fileform
-								))
-							else: filename = None
 							download = x.group(scan_group)
 							if "://" not in download:
 								if download[0] == "/": download = baseurl + download
 								else: download = baseurl + basepath + download
 							#endif
+							if fileform:
+								filename = ''.join(map(
+									lambda y: y.form(args, counter, download) if isinstance(y, Marker) else y,
+									fileform
+								))
+							else: filename = None
 							# TODO: Pass url as the referrer
-							if options.print_scans: print download
-							else: download_file(download, filename, domime)
+							if options.print_scans: print_data(download)
+							else: download_file(download, filename)
 							i += 1
 						#endfor
 					#endif
-				else: error = not download_file(url, ''.join(map(unicode, fileform)) if fileform else None, domime)
+				else: error = not download_file(url, ''.join(map(unicode, fileform)) if fileform else None)
 				# TODO: Not sure how to distribute blame at the moment
 				# So yeah this is just a trial I guess
 				if increased: increased.result(error)
@@ -549,6 +577,7 @@ def main():
 
 if __name__ == "__main__":
 	try: sys.exit(main())
-	except CounterError as err: print "Fatal error in counter %s: %s" % err.args
-	except (EOFError, KeyboardInterrupt): print "\nProgram terminated"
+	except CounterError as err: print_err("Fatal error in counter %s: %s" % err.args)
+	except MarkerError as err: print_err("Fatal error in filename piece %s: %s" % err.args)
+	except (EOFError, KeyboardInterrupt): print_err("\nProgram terminated")
 #endif

@@ -84,6 +84,16 @@ If you supplied a search URL, you can address the groups you made in that with
 a pound sign (#) followed by the group number.
 The special sequence #i and group 0 (ie. #0) refer to the index of the match on
 the page. The first match is 0 and the second is 1 and so-on.
+You can use @ to index portions of the URL to be downloaded.
+ If this is a positive index, it's from the first level, starting at 0.
+ (Example: http://www.example.com/0th_level_here/1st_level_here)
+ If this is a negative index, it counts backwards from the end, including the
+ filename at -1
+ If the first number is follow by a hyphen and another number, it returns a
+ range of levels from the first index to the last. If the initial number is
+ negative, the final number is assumed to be negative.
+ If the first number is instead followed by a +, it will include all levels from
+ the first index until the end of the URL.
 
 ==== Continue Syntax ====
 When using the continue option, specify the counters and their starting
@@ -99,6 +109,10 @@ Generally you won't need to know this but I figured it'd be good to mention!
 v5 Added ability to print scanned URLs with -P
  * Suppress adding extensions based on mime-type with -m
  * Fixed bug when looking up mime type renaming.
+ * When printing URLs, all other info prints to stderr so you can pipe the URLs.
+ * Added @ form to filenames.
+ * Fixed bug in ordinal numbering.
+ * Fixed bug in passing standard input.
 v4 Rewrote from scratch
  * Now allows \ and * as the 0th and 1st digits with another \ prefix, ie. [\\*]
  * Added #i and #0 in filename as being the index of the link found on the page
