@@ -263,7 +263,7 @@ class Marker(object):
 		else: self.type = 3
 	#enddef
 
-	def form(self, groups, counters, url):
+	def form(self, groups, url):
 		if self.type == 1:
 			counter = None
 			for x in counters:
@@ -327,7 +327,7 @@ mime2ext_overrides = {
 	"text/plain": ".txt",
 	"image/jpeg": ".jpg",
 }
-def download_file(url, filename):
+def download_file(url, fileform, args):
 	"""
 	Download contents of page at url to filename
 	Return if successful
@@ -337,7 +337,12 @@ def download_file(url, filename):
 	if data is None: return False
 
 	# Make filename if necessary
-	if not filename:
+	if fileform:
+		filename = ''.join(map(
+			lambda y: y.form(args, url) if isinstance(y, Marker) else y,
+			fileform
+		))
+	if not fileform:
 		url = urllib.unquote(urlparse(url).path)
 		filename = url[url.rfind("/") + 1:]
 		if not options.dont_mime_ext and "." not in filename:
@@ -404,7 +409,7 @@ def print_info(info):
 def print_data(data): print(data)
 
 def main():
-	global options
+	global options, counters
 	parser = OptionParser(version="5",
 		description="Dump v5 by Wa (logicplace.com)\n",
 		usage="Usage: %prog [options] address [address...]"
@@ -545,19 +550,14 @@ def main():
 								if download[0] == "/": download = baseurl + download
 								else: download = baseurl + basepath + download
 							#endif
-							if fileform:
-								filename = ''.join(map(
-									lambda y: y.form(args, counter, download) if isinstance(y, Marker) else y,
-									fileform
-								))
-							else: filename = None
+
 							# TODO: Pass url as the referrer
 							if options.print_scans: print_data(download)
-							else: download_file(download, filename)
+							else: download_file(download, fileform, args)
 							i += 1
 						#endfor
 					#endif
-				else: error = not download_file(url, ''.join(map(unicode, fileform)) if fileform else None)
+				else: error = not download_file(url, fileform, [])
 				# TODO: Not sure how to distribute blame at the moment
 				# So yeah this is just a trial I guess
 				if increased: increased.result(error)

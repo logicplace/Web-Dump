@@ -113,6 +113,7 @@ v5 Added ability to print scanned URLs with -P
  * Added @ form to filenames.
  * Fixed bug in ordinal numbering.
  * Fixed bug in passing standard input.
+ * Fixed bug in filename formation.
 v4 Rewrote from scratch
  * Now allows \ and * as the 0th and 1st digits with another \ prefix, ie. [\\*]
  * Added #i and #0 in filename as being the index of the link found on the page
