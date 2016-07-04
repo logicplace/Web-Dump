@@ -327,13 +327,13 @@ mime2ext_overrides = {
 	"text/plain": ".txt",
 	"image/jpeg": ".jpg",
 }
-def download_file(url, fileform, args):
+def download_file(url, fileform, args, headers=[]):
 	"""
 	Download contents of page at url to filename
 	Return if successful
 	"""
 	# Download the data
-	data, mime = download_page(url, return_mime=True)
+	data, mime = download_page(url, return_mime=True, headers=headers)
 	if data is None: return False
 
 	# Make filename if necessary
@@ -365,13 +365,15 @@ def download_file(url, fileform, args):
 	return True
 #enddef
 
-def download_page(url, return_mime=False, return_baseurl=False):
+def download_page(url, return_mime=False, return_baseurl=False, headers=[]):
 	"""
 	Download page and return contents
 	"""
 	print_info(u"   Downloading: %s" % url)
 	try:
-		handle = urllib2.urlopen(url)
+		opener = urllib2.build_opener()
+		opener.addheaders.extend(headers)
+		handle = opener.open(url)
 		ret = handle.read()
 		if return_mime: mime = (lambda x: x.getmaintype() + "/" + x.getsubtype())(handle.info())
 		if return_baseurl: baseurl = handle.geturl()
@@ -442,6 +444,9 @@ def main():
 	)
 	parser.add_option("-d", action="count", dest="debug",
 		help=SUPPRESS_HELP
+	)
+	parser.add_option("-C", "--cookie", default="",
+		help="Pass a cookie string. You can find this by going to the page and typing javascript:alert(document.cookie) in the address bar."
 	)
 
 	# Merge args from stdin with args from command line
@@ -517,6 +522,12 @@ def main():
 		#endif
 	else: scan = None
 
+	# Make headers
+	headers = []
+	if options.cookie: headers.append(("Cookie", options.cookie))
+
+	# TODO: Debug thing for headers 
+
 	if options.debug: print "Starting from %s url" % ordinal(start)
 	for idx, url_parts in enumerate(parsed):
 		if idx < start: continue
@@ -535,7 +546,7 @@ def main():
 					filter(notNone, map(lambda x: x.cont(), counter))
 				))
 				if scan:
-					page, baseurl = download_page(url, return_baseurl=True)
+					page, baseurl = download_page(url, return_baseurl=True, headers=headers)
 					if page is None: error = True
 					else:
 						error, i = False, 0
@@ -551,13 +562,12 @@ def main():
 								else: download = baseurl + basepath + download
 							#endif
 
-							# TODO: Pass url as the referrer
 							if options.print_scans: print_data(download)
-							else: download_file(download, fileform, args)
+							else: download_file(download, fileform, args, headers=headers + [("Referer", baseurl)])
 							i += 1
 						#endfor
 					#endif
-				else: error = not download_file(url, fileform, [])
+				else: error = not download_file(url, fileform, [], headers=headers)
 				# TODO: Not sure how to distribute blame at the moment
 				# So yeah this is just a trial I guess
 				if increased: increased.result(error)
